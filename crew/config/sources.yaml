@@ -1,0 +1,31 @@
+# Initial 5 sources for Criterion 2
+sources:
+  - name: Simon Willison's Blog
+    url: https://simonwillison.net/atom/everything/
+    type: rss
+    category: agent_coding
+    active: true
+    
+  - name: Anthropic Developer Blog
+    url: https://www.anthropic.com/news
+    type: web  # Will use RSS if available, fallback to web scraping
+    category: ai_tooling
+    active: true
+    
+  - name: Latent Space
+    url: https://www.latent.space/feed
+    type: rss
+    category: agent_coding
+    active: true
+    
+  - name: LocalLLaMA
+    url: https://www.reddit.com/r/LocalLLaMA/top/.rss?t=week
+    type: rss
+    category: local_llms
+    active: true
+    
+  - name: Import AI
+    url: https://jack-clark.net/feed/
+    type: rss
+    category: frontier_models
+    active: true
