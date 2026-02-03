@@ -1,0 +1,295 @@
+{
+  "name": "Context Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "context-manager",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.item.json;\nconst body = payload.body || payload;\nconst command = body.command || payload.command || '';\nconst text = body.text || payload.text || '';\nconst userName = body.user_name || payload.user_name || 'unknown';\n\nfunction sanitizeFilename(name) {\n  return name.toLowerCase().replace(/[^a-z0-9\\s-]/g, '').replace(/\\s+/g, '-').replace(/-+/g, '-').trim();\n}\n\nlet commandType = 'unknown';\nlet projectName = '';\nlet description = '';\nlet content = '';\nlet meetingName = '';\nlet query = '';\n\n// Parse different command types\nif (command === '/interests') {\n  commandType = 'interests';\n  description = text.trim();\n} else if (command === '/newproject') {\n  commandType = 'new_project';\n  projectName = text.trim();\n} else if (command === '/updatebrief') {\n  commandType = 'update_brief';\n  // Format: /updatebrief project-name: content\n  const parts = text.split(':');\n  if (parts.length >= 2) {\n    projectName = parts[0].trim();\n    content = parts.slice(1).join(':').trim();\n  }\n} else if (command === '/transcript') {\n  commandType = 'transcript';\n  // Format: /transcript meeting-name: content\n  const parts = text.split(':');\n  if (parts.length >= 2) {\n    meetingName = parts[0].trim();\n    content = parts.slice(1).join(':').trim();\n  }\n} else if (command === '/recall') {\n  commandType = 'recall';\n  query = text.trim();\n}\n\nconst now = new Date();\nconst dateStr = now.toISOString().split('T')[0];\n\nreturn {\n  json: {\n    commandType,\n    projectName,\n    description,\n    content,\n    meetingName,\n    query,\n    filename: projectName ? sanitizeFilename(projectName) : (meetingName ? sanitizeFilename(meetingName) : ''),\n    dateStr,\n    userName,\n    originalCommand: command,\n    originalText: text,\n    debug: JSON.stringify(payload)\n  }\n};"
+      },
+      "name": "Parse Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 400]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "interests",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "interests"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "new_project",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "new_project"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "update_brief",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "update_brief"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "transcript",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "transcript"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "recall",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "recall"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.1,
+      "position": [600, 400]
+    },
+    {
+      "parameters": {
+        "command": "=mkdir -p /context && if [ ! -f /context/hot_topics.md ]; then echo '# Hot Topics' > /context/hot_topics.md; fi && echo '- **{{ $json.dateStr }}:** {{ $json.description }}' >> /context/hot_topics.md && echo 'SUCCESS'"
+      },
+      "name": "SSH Add Interest",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 200],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "KY7n4wvIfRTeFk7v",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=mkdir -p /context/briefs && echo '# Project: {{ $json.projectName }}' > '/context/briefs/{{ $json.filename }}.md' && echo 'Created: {{ $json.dateStr }}' >> '/context/briefs/{{ $json.filename }}.md' && echo 'SUCCESS'"
+      },
+      "name": "SSH New Project",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 300],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "KY7n4wvIfRTeFk7v",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=if [ -f '/context/briefs/{{ $json.filename }}.md' ]; then echo '' >> '/context/briefs/{{ $json.filename }}.md' && echo '**Updated {{ $json.dateStr }}:** {{ $json.content }}' >> '/context/briefs/{{ $json.filename }}.md' && echo 'SUCCESS'; else echo 'ERROR: Project not found'; exit 1; fi"
+      },
+      "name": "SSH Update Brief",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 400],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "KY7n4wvIfRTeFk7v",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=mkdir -p /context/transcripts && cat > '/context/transcripts/{{ $json.dateStr }}-{{ $json.filename }}.md' << 'TRANSCRIPT_EOF'\n# Transcript: {{ $json.meetingName }}\n**Date:** {{ $json.dateStr }}\n\n{{ $json.content }}\nTRANSCRIPT_EOF\necho 'SUCCESS'"
+      },
+      "name": "SSH Add Transcript",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 500],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "KY7n4wvIfRTeFk7v",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=grep -r -i -n '{{ $json.query }}' /context/ 2>/dev/null | head -20 || echo 'No results found'"
+      },
+      "name": "SSH Recall Search",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 600],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "KY7n4wvIfRTeFk7v",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"text\": \"Added interest: {{ $('Parse Command').item.json.description }}\", \"response_type\": \"ephemeral\" }"
+      },
+      "name": "Respond Interest",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"text\": \"Created project: {{ $('Parse Command').item.json.projectName }}\", \"response_type\": \"ephemeral\" }"
+      },
+      "name": "Respond Project",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"text\": \"Updated brief: {{ $('Parse Command').item.json.projectName }}\", \"response_type\": \"ephemeral\" }"
+      },
+      "name": "Respond Update Brief",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"text\": \"Saved transcript: {{ $('Parse Command').item.json.meetingName }}\", \"response_type\": \"ephemeral\" }"
+      },
+      "name": "Respond Transcript",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.item.json.stdout || 'No results found';\nconst query = $('Parse Command').item.json.query;\n\n// Format results for Slack\nlet formattedResults = `Search results for \"${query}\":\\n\\n`;\n\nif (results === 'No results found' || results.trim() === '') {\n  formattedResults += 'No matches found in context files.';\n} else {\n  const lines = results.split('\\n').slice(0, 15);\n  formattedResults += '```\\n' + lines.join('\\n') + '\\n```';\n  if (results.split('\\n').length > 15) {\n    formattedResults += '\\n(Showing first 15 results)';\n  }\n}\n\nreturn {\n  json: {\n    text: formattedResults,\n    response_type: 'ephemeral'\n  }\n};"
+      },
+      "name": "Format Recall Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 600]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "Respond Recall",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1200, 600]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "name": "Respond Unknown",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [800, 750]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Parse Command", "type": "main", "index": 0 }]]
+    },
+    "Parse Command": {
+      "main": [[{ "node": "Route", "type": "main", "index": 0 }]]
+    },
+    "Route": {
+      "main": [
+        [{ "node": "SSH Add Interest", "type": "main", "index": 0 }],
+        [{ "node": "SSH New Project", "type": "main", "index": 0 }],
+        [{ "node": "SSH Update Brief", "type": "main", "index": 0 }],
+        [{ "node": "SSH Add Transcript", "type": "main", "index": 0 }],
+        [{ "node": "SSH Recall Search", "type": "main", "index": 0 }],
+        [{ "node": "Respond Unknown", "type": "main", "index": 0 }]
+      ]
+    },
+    "SSH Add Interest": {
+      "main": [[{ "node": "Respond Interest", "type": "main", "index": 0 }]]
+    },
+    "SSH New Project": {
+      "main": [[{ "node": "Respond Project", "type": "main", "index": 0 }]]
+    },
+    "SSH Update Brief": {
+      "main": [[{ "node": "Respond Update Brief", "type": "main", "index": 0 }]]
+    },
+    "SSH Add Transcript": {
+      "main": [[{ "node": "Respond Transcript", "type": "main", "index": 0 }]]
+    },
+    "SSH Recall Search": {
+      "main": [[{ "node": "Format Recall Results", "type": "main", "index": 0 }]]
+    },
+    "Format Recall Results": {
+      "main": [[{ "node": "Respond Recall", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {}
+}

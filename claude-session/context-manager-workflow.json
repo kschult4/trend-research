@@ -1,0 +1,358 @@
+{
+  "name": "Context Manager (Trend Monitoring)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "context-manager",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Slack Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "context-manager-webhook"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Parse Slack message and extract command\nconst payload = $input.item.json;\nconst text = payload.event?.text || payload.text || '';\nconst channel = payload.event?.channel || payload.channel || '';\n\n// Helper function to sanitize filename\nfunction sanitizeFilename(name) {\n  return name\n    .toLowerCase()\n    .replace(/[^a-z0-9\\s-]/g, '')  // Remove special chars\n    .replace(/\\s+/g, '-')           // Spaces to hyphens\n    .replace(/-+/g, '-')            // Collapse multiple hyphens\n    .trim();\n}\n\n// Command detection\nlet commandType = 'unknown';\nlet projectName = '';\nlet description = '';\nlet content = '';\n\n// Check for \"Hot topic:\"\nconst hotTopicMatch = text.match(/^Hot topic:\\s*(.+)$/is);\nif (hotTopicMatch) {\n  commandType = 'hot_topic';\n  description = hotTopicMatch[1].trim();\n}\n\n// Check for \"New project:\"\nconst newProjectMatch = text.match(/^New project:\\s*(.+?)(?:\\n|$)([\\s\\S]*)$/i);\nif (newProjectMatch) {\n  commandType = 'new_project';\n  projectName = newProjectMatch[1].trim();\n  content = newProjectMatch[2]?.trim() || '';\n}\n\n// Check for \"Update [name]:\"\nconst updateMatch = text.match(/^Update\\s+(.+?):\\s*(.+)$/is);\nif (updateMatch) {\n  commandType = 'update_project';\n  projectName = updateMatch[1].trim();\n  content = updateMatch[2].trim();\n}\n\n// Check for \"Transcript:\"\nconst transcriptMatch = text.match(/^Transcript:\\s*(.+)$/is);\nif (transcriptMatch) {\n  commandType = 'transcript';\n  projectName = transcriptMatch[1].trim();\n}\n\n// Get current date\nconst now = new Date();\nconst dateStr = now.toISOString().split('T')[0];\nconst timestamp = now.toISOString().replace('T', ' ').split('.')[0];\n\nreturn {\n  commandType,\n  projectName,\n  description,\n  content,\n  filename: projectName ? sanitizeFilename(projectName) : '',\n  dateStr,\n  timestamp,\n  originalText: text,\n  channel,\n  threadTs: payload.event?.ts || payload.ts || ''\n};"
+      },
+      "id": "parse-message",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.commandType }}",
+                    "value2": "hot_topic"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "hot_topic"
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.commandType }}",
+                    "value2": "new_project"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "new_project"
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.commandType }}",
+                    "value2": "update_project"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "update_project"
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{ $json.commandType }}",
+                    "value2": "transcript"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "transcript"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "route-command",
+      "name": "Route by Command",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "command": "=if [ ! -s /context/hot_topics.md ]; then\n  echo \"# Hot Topics\" > /context/hot_topics.md\n  echo \"\" >> /context/hot_topics.md\n  echo \"Leadership concerns, themes, and priorities.\" >> /context/hot_topics.md\n  echo \"\" >> /context/hot_topics.md\nfi\necho \"- **{{ $json.dateStr }}:** {{ $json.description }}\" >> /context/hot_topics.md\necho \"SUCCESS: Added hot topic\""
+      },
+      "id": "ssh-hot-topic",
+      "name": "SSH: Add Hot Topic",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 100],
+      "credentials": {
+        "sshPassword": {
+          "id": "CREATE_NEW_CREDENTIAL",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=if [ -f /context/briefs/{{ $json.filename }}.md ]; then\n  echo \"ERROR: Brief already exists. Use 'Update {{ $json.projectName }}:' instead.\"\n  exit 1\nfi\n\ncat > /context/briefs/{{ $json.filename }}.md << 'EOFBRIEF'\n# Project: {{ $json.projectName }}\n\n**Status:** Active\n**Last Updated:** {{ $json.dateStr }}\n\n## Summary\n{{ $json.content || \"TODO: Add summary\" }}\n\n## My Role\nTODO: Define role\n\n## Key Stakeholders\nTODO: List stakeholders\n\n## Current Phase\nTODO: Describe current phase\n\n## Open Questions / Blockers\nTODO: List questions\n\n## Leadership Visibility\nTODO: Describe visibility\nEOFBRIEF\n\nchmod 644 /context/briefs/{{ $json.filename }}.md\necho \"SUCCESS: Created brief\""
+      },
+      "id": "ssh-new-project",
+      "name": "SSH: Create New Project",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 250],
+      "credentials": {
+        "sshPassword": {
+          "id": "CREATE_NEW_CREDENTIAL",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=if [ ! -f /context/briefs/{{ $json.filename }}.md ]; then\n  echo \"ERROR: Brief '{{ $json.projectName }}' not found. Available briefs:\"\n  ls /context/briefs/ 2>/dev/null || echo \"(none)\"\n  exit 1\nfi\n\ncat >> /context/briefs/{{ $json.filename }}.md << 'EOFUPDATE'\n\n---\n**Update:** {{ $json.timestamp }}\n\n{{ $json.content }}\nEOFUPDATE\n\necho \"SUCCESS: Updated brief\""
+      },
+      "id": "ssh-update-project",
+      "name": "SSH: Update Project",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 400],
+      "credentials": {
+        "sshPassword": {
+          "id": "CREATE_NEW_CREDENTIAL",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=cat > /context/transcripts/{{ $json.dateStr }}-{{ $json.filename }}.md << 'EOFTRANSCRIPT'\n# Transcript: {{ $json.projectName }}\n**Date:** {{ $json.dateStr }}\n\n{{ $json.content || $json.originalText }}\nEOFTRANSCRIPT\n\nchmod 644 /context/transcripts/{{ $json.dateStr }}-{{ $json.filename }}.md\necho \"SUCCESS: Created transcript\""
+      },
+      "id": "ssh-transcript",
+      "name": "SSH: Create Transcript",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 550],
+      "credentials": {
+        "sshPassword": {
+          "id": "CREATE_NEW_CREDENTIAL",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Build success message based on command type\nconst data = $input.item.json;\nconst commandType = data.commandType;\nconst filename = data.filename;\nconst dateStr = data.dateStr;\n\nlet message = '';\n\nif (commandType === 'hot_topic') {\n  message = `✅ Added hot topic to /context/hot_topics.md`;\n} else if (commandType === 'new_project') {\n  message = `✅ Created brief: /context/briefs/${filename}.md`;\n} else if (commandType === 'update_project') {\n  message = `✅ Updated brief: /context/briefs/${filename}.md`;\n} else if (commandType === 'transcript') {\n  message = `✅ Saved transcript: /context/transcripts/${dateStr}-${filename}.md`;\n} else {\n  message = `✅ Operation completed`;\n}\n\nreturn { message, channel: data.channel, threadTs: data.threadTs };"
+      },
+      "id": "format-success",
+      "name": "Format Success Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Build error message\nconst data = $input.item.json;\nconst errorOutput = $('SSH: Add Hot Topic').itemMatching(0) || \n                    $('SSH: Create New Project').itemMatching(0) ||\n                    $('SSH: Update Project').itemMatching(0) ||\n                    $('SSH: Create Transcript').itemMatching(0) || {};\n\nconst stderr = errorOutput.json?.stderr || errorOutput.error || 'Unknown error';\n\nlet message = `❌ Error: ${stderr}`;\n\nreturn { message, channel: data.channel, threadTs: data.threadTs };"
+      },
+      "id": "format-error",
+      "name": "Format Error Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 500]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Unknown command error\nconst data = $input.item.json;\n\nconst message = `❌ Command not recognized. Valid formats:\n• New project: [name]\n• Update [name]: [changes]\n• Hot topic: [description]\n• Transcript: [meeting]`;\n\nreturn { message, channel: data.channel, threadTs: data.threadTs };"
+      },
+      "id": "format-unknown",
+      "name": "Format Unknown Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 700]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://slack.com/api/chat.postMessage",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $json.channel }}\",\n  \"text\": \"{{ $json.message }}\",\n  \"thread_ts\": \"{{ $json.threadTs }}\"\n}",
+        "options": {}
+      },
+      "id": "slack-reply",
+      "name": "Slack Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 400],
+      "credentials": {
+        "slackApi": {
+          "id": "EXISTING_SLACK_CREDENTIAL",
+          "name": "Slack API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Slack Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "Route by Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Command": {
+      "main": [
+        [
+          {
+            "node": "SSH: Add Hot Topic",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SSH: Create New Project",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SSH: Update Project",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SSH: Create Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Unknown Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH: Add Hot Topic": {
+      "main": [
+        [
+          {
+            "node": "Format Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH: Create New Project": {
+      "main": [
+        [
+          {
+            "node": "Format Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH: Update Project": {
+      "main": [
+        [
+          {
+            "node": "Format Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH: Create Transcript": {
+      "main": [
+        [
+          {
+            "node": "Format Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Success Message": {
+      "main": [
+        [
+          {
+            "node": "Slack Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error Message": {
+      "main": [
+        [
+          {
+            "node": "Slack Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Unknown Command": {
+      "main": [
+        [
+          {
+            "node": "Slack Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "meta": {
+    "instanceId": "crewai-context-manager"
+  },
+  "tags": []
+}

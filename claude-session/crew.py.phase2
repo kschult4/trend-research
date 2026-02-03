@@ -1,0 +1,377 @@
+#!/usr/bin/env python3
+"""
+CrewAI Strategic Intelligence Crew - Criterion 4: Full Crew with Slack Output
+Scout + Analyst + Homelab Strategist + Work Strategist + Slack Formatting
+"""
+
+import os
+import yaml
+from datetime import datetime
+from dotenv import load_dotenv
+from crewai import Agent, Task, Crew, Process
+from tools.source_fetcher import SourceFetcher
+from tools.context_loader import load_homelab_context, load_work_context, get_context_summary
+from tools.slack_formatter import save_for_n8n, save_for_n8n_with_opportunities
+from tools.opportunity_parser import parse_opportunities, save_opportunity_mapping
+
+# Load environment variables
+load_dotenv('config/.env')
+
+# Initialize source fetcher (24 hours)
+fetcher = SourceFetcher(lookback_hours=24)
+
+# Load source configuration
+with open('config/sources.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+
+# Load context files
+print("[Crew] Loading context files...")
+context_summary = get_context_summary()
+print(f"[Crew] Context available: {context_summary}")
+
+homelab_context = load_homelab_context()
+work_context = load_work_context()
+
+# Fetch content from all active sources
+print("[Crew] Fetching content from sources...")
+all_entries = []
+for source in config['sources']:
+    if source['active'] and source['type'] == 'rss':
+        entries = fetcher.fetch_rss(source['url'], source['name'])
+        all_entries.extend(entries[:5])  # Limit to 5 entries per source
+
+# Limit total entries to 15 for manageable context
+all_entries = all_entries[:15]
+
+# Format for Scout
+source_content = fetcher.format_for_scout(all_entries)
+print(f"[Crew] Fetched {len(all_entries)} total entries (limited for test)\n")
+
+# === SCOUT AGENT ===
+scout = Agent(
+    role='Trend Scout',
+    goal='Monitor AI/automation/homelab sources and tag signals by significance',
+    backstory="""You are an experienced technology scout with deep expertise in 
+    AI tooling, automation, and homelab systems. You excel at filtering signal 
+    from noise and recognizing when a development is truly significant versus 
+    just incremental progress.
+    
+    Your job is to read through recent content and identify signals worth 
+    tracking. You categorize each signal by significance:
+    
+    🔴 MILESTONE - Major shift, paradigm change, need to know now
+    🟡 MOVEMENT - Trend building momentum, worth tracking
+    ⚪ NOISE - Logged for context but not immediately relevant
+    
+    You focus on: practical tools, adoption patterns, workflow changes, 
+    new capabilities that solve real problems.""",
+    verbose=True,
+    allow_delegation=False,
+    llm='claude-3-haiku-20240307'
+)
+
+# === ANALYST AGENT ===
+analyst = Agent(
+    role='Pattern Analyst',
+    goal='Synthesize patterns across Scout signals and identify emerging themes',
+    backstory="""You are a strategic analyst who excels at connecting dots 
+    across disparate signals. You see patterns before they become obvious. 
+    You think in terms of implications, not just features.
+    
+    Your job is to take the Scout's tagged signals and synthesize them into 
+    insights. You look for convergence, contradictions, gaps, and acceleration.
+    
+    You write analysis that is concise, opinionated, and actionable.""",
+    verbose=True,
+    allow_delegation=False,
+    llm='claude-sonnet-4-5-20250929'
+)
+
+# === HOMELAB STRATEGIST AGENT ===
+homelab_strategist = Agent(
+    role='Homelab Strategist',
+    goal='Evaluate trend signals for relevance to Kyle\'s homelab projects and learning goals',
+    backstory="""You are a strategic advisor focused on homelab infrastructure and 
+    self-hosted systems. You understand the constraints of home hardware, the value 
+    of local-first architectures, and the balance between experimentation and stability.
+    
+    You excel at recognizing when a new trend, tool, or technique could:
+    - Solve an existing homelab pain point
+    - Enable a new capability worth exploring
+    - Connect to active learning goals or projects
+    - Improve reliability, observability, or maintainability
+    
+    You are selective and practical. Not every signal is actionable. You focus on 
+    opportunities that are:
+    - Achievable with consumer hardware and reasonable effort
+    - Aligned with current projects or clear next steps
+    - Worth the complexity/maintenance tradeoff
+    
+    When you identify an opportunity, you explain the specific connection to Kyle's 
+    homelab context and suggest a concrete next action.""",
+    verbose=True,
+    allow_delegation=False,
+    llm='claude-sonnet-4-5-20250929'
+)
+
+# === WORK STRATEGIST AGENT ===
+work_strategist = Agent(
+    role='Work Strategist',
+    goal='Evaluate trend signals for relevance to Kyle\'s work projects, leadership priorities, and strategic goals',
+    backstory="""You are a strategic advisor for a Director of Experience Strategy 
+    at a consulting company. You understand the pressures of digital transformation, 
+    the challenge of integrating AI into creative work, and the importance of 
+    balancing efficiency with differentiation.
+    
+    You excel at recognizing when a trend, tool, or capability could:
+    - Solve a current client or team challenge
+    - Create competitive differentiation in client work
+    - Upskill the team without disrupting productivity
+    - Provide leadership visibility and alignment opportunities
+    - Enable rapid prototyping or vibecoding workflows
+    
+    You are highly selective. Most signals won't be work-relevant. You focus on:
+    - Tools/techniques gaining practitioner adoption (not just hype)
+    - Capabilities that solve documented problems or priorities
+    - Approaches that balance human creativity with AI efficiency
+    - Opportunities Kyle can actually influence or advocate for
+    
+    When you identify an opportunity, you connect it specifically to documented 
+    projects, hot topics, or strategic priorities, and suggest how to leverage it.""",
+    verbose=True,
+    allow_delegation=False,
+    llm='claude-sonnet-4-5-20250929'
+)
+
+# === SCOUT TASK ===
+scout_task = Task(
+    description=f"""Analyze the following content from AI/automation/homelab sources.
+    Identify and tag signals by significance level.
+    
+    CONTENT TO ANALYZE:
+    {source_content}
+    
+    For each signal you identify:
+    1. Assign significance: 🔴 Milestone, 🟡 Movement, or ⚪ Noise
+    2. Extract the core signal (what changed, what's new)
+    3. Note the source
+    4. Be selective - not every item is worth flagging
+    
+    Output format:
+    ## 🔴 Milestone Signals
+    [List any milestone signals with brief description]
+    
+    ## 🟡 Movement Signals  
+    [List movement signals with brief description]
+    
+    ## ⚪ Noise (Context Only)
+    [List noise signals briefly]
+    """,
+    agent=scout,
+    expected_output="Tagged signals organized by significance level with descriptions"
+)
+
+# === ANALYST TASK ===
+analyst_task = Task(
+    description="""Take the Scout's tagged signals and synthesize patterns across them.
+    
+    Your analysis should include:
+    1. Emerging Patterns - What themes or directions are appearing?
+    2. Implications - What do these patterns suggest about where things are heading?
+    3. Open Questions - What gaps or contradictions deserve attention?
+    
+    Be concise but insightful. Focus on synthesis, not just summary.
+    
+    Output a well-structured analysis section.""",
+    agent=analyst,
+    expected_output="Synthesized analysis identifying patterns, implications, and open questions",
+    context=[scout_task]
+)
+
+# === HOMELAB STRATEGIST TASK ===
+homelab_strategist_task = Task(
+    description=f"""Evaluate the Scout signals and Analyst synthesis for relevance to 
+    Kyle's homelab infrastructure and learning goals.
+    
+    HOMELAB CONTEXT:
+    {homelab_context}
+    
+    Your job:
+    1. Review the signals and synthesis from Scout and Analyst
+    2. Identify which signals (if any) are relevant to the homelab context above
+    3. For each relevant signal, explain:
+       - What specific homelab project, system, or learning goal it connects to
+       - Why it's worth attention (what problem it solves or capability it enables)
+       - Suggested next action (experiment, research, prototype, or defer)
+    
+    Be selective. Most signals will NOT be homelab-relevant. Only flag genuine opportunities.
+    
+    If no signals are relevant, state that clearly rather than forcing connections.
+    
+    OUTPUT REQUIREMENTS:
+    For each opportunity you identify, use this EXACT structure:
+
+    ### Opportunity: [Clear Title]
+    **Relevance:** [Why this matters to Kyle's homelab context - specific project/system connection]
+    **Signal:** [What specific development/trend triggered this opportunity]
+    **Next Steps:** [Concrete action to explore/implement this - be specific]
+
+    Important formatting rules:
+    - Each opportunity MUST start with "### Opportunity:" header
+    - Use **bold** for subsection headers (Relevance, Signal, Next Steps)
+    - Be selective - only flag genuinely actionable opportunities
+    - If no opportunities exist, output: "No homelab-relevant signals in this digest."
+
+    Example:
+    ### Opportunity: Local LLM Fine-tuning with Ollama
+    **Relevance:** Connects to AI Box project (192.168.1.204) and local inference goals
+    **Signal:** New Ollama fine-tuning capabilities for consumer hardware announced
+    **Next Steps:** Research Ollama adapter support and test with Gemma 7B model on AI Box
+    """,
+    agent=homelab_strategist,
+    expected_output="Structured opportunities with ### Opportunity: headers containing Relevance, Signal, and Next Steps, or explicit no-opportunity statement",
+    context=[scout_task, analyst_task]
+)
+
+# === WORK STRATEGIST TASK ===
+work_strategist_task = Task(
+    description=f"""Evaluate the Scout signals and Analyst synthesis for relevance to 
+    Kyle's work role, active projects, and strategic priorities.
+    
+    WORK CONTEXT:
+    {work_context}
+    
+    Your job:
+    1. Review the signals and synthesis from Scout and Analyst
+    2. Cross-reference against documented work role, project briefs, hot topics, and transcripts
+    3. Identify which signals (if any) connect to work priorities or challenges
+    4. For each relevant signal, explain:
+       - What specific project, priority, or hot topic it addresses
+       - Why it's actionable for Kyle's role and influence level
+       - How it could provide leadership visibility or team value
+       - Suggested next action (experiment, advocate, pilot, share with team)
+    
+    Be highly selective. Most signals won't be work-relevant. Only flag opportunities that:
+    - Connect to documented priorities or problems
+    - Are within Kyle's sphere of influence
+    - Offer genuine differentiation or efficiency gains
+    
+    If no signals are relevant, state that clearly rather than forcing connections.
+    
+    OUTPUT REQUIREMENTS:
+    For each opportunity you identify, use this EXACT structure:
+
+    ### Opportunity: [Clear Title]
+    **Relevance:** [Why this matters to Kyle's work context - specific project/priority connection]
+    **Signal:** [What specific development/trend triggered this opportunity]
+    **Next Steps:** [Concrete action to leverage this - experiment, advocate, pilot, share]
+
+    Important formatting rules:
+    - Each opportunity MUST start with "### Opportunity:" header
+    - Use **bold** for subsection headers (Relevance, Signal, Next Steps)
+    - Be highly selective - only flag genuinely actionable work opportunities
+    - If no opportunities exist, output: "No work-relevant signals in this digest."
+
+    Example:
+    ### Opportunity: AI-Assisted Code Review Patterns
+    **Relevance:** Directly relates to velocity improvement goals in Project Phoenix brief
+    **Signal:** New Claude Code review capabilities with contextual feedback emerging in practitioner adoption
+    **Next Steps:** Pilot with one team sprint, document productivity impact, share findings with leadership
+    """,
+    agent=work_strategist,
+    expected_output="Structured opportunities with ### Opportunity: headers containing Relevance, Signal, and Next Steps, or explicit no-opportunity statement",
+    context=[scout_task, analyst_task]
+)
+
+# === CREW ORCHESTRATION ===
+crew = Crew(
+    agents=[scout, analyst, homelab_strategist, work_strategist],
+    tasks=[scout_task, analyst_task, homelab_strategist_task, work_strategist_task],
+    process=Process.sequential,
+    verbose=True
+)
+
+# === EXECUTE ===
+print("\n" + "="*80)
+print("STARTING CREW EXECUTION - CRITERION 5 PHASE 2 (OPPORTUNITY PARSING)")
+print("="*80 + "\n")
+
+try:
+    result = crew.kickoff()
+    
+    # Get individual task outputs
+    scout_output = scout_task.output.raw if hasattr(scout_task, 'output') else "Scout output not available"
+    analyst_output = analyst_task.output.raw if hasattr(analyst_task, 'output') else "Analyst output not available"
+    homelab_output = homelab_strategist_task.output.raw if hasattr(homelab_strategist_task, 'output') else "Homelab Strategist output not available"
+    work_output = str(result)  # Final task output
+
+    # === PARSE OPPORTUNITIES (CRITERION 5 PHASE 2) ===
+    print("\n[Crew] Parsing opportunities from Strategist outputs...")
+    homelab_opportunities = parse_opportunities(homelab_output, 'H')
+    work_opportunities = parse_opportunities(work_output, 'W')
+
+    print(f"[Crew] Parsed {len(homelab_opportunities)} homelab opportunities")
+    print(f"[Crew] Parsed {len(work_opportunities)} work opportunities")
+
+    # Combine for mapping file
+    all_opportunities = {**homelab_opportunities, **work_opportunities}
+
+    # Save opportunity mapping for approval poller
+    digest_date = datetime.now().strftime("%Y-%m-%d")
+    if all_opportunities:
+        opp_mapping_file = save_opportunity_mapping(all_opportunities, digest_date)
+        print(f"[Crew] Opportunity mapping saved: {opp_mapping_file}")
+    else:
+        print(f"[Crew] No opportunities to save (both Strategists returned no opportunities)")
+
+    # Prepare metadata
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    metadata = {
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'sources_count': len(config['sources']),
+        'signals_count': len(all_entries),
+        'context': context_summary
+    }
+    
+    # === SAVE MARKDOWN OUTPUT ===
+    markdown_file = f"output/digest_{timestamp}.md"
+    
+    with open(markdown_file, 'w') as f:
+        f.write(f"# Strategic Intelligence Digest\n")
+        f.write(f"**Generated:** {metadata['timestamp']}\n")
+        f.write(f"**Sources Monitored:** {metadata['sources_count']}\n")
+        f.write(f"**Signals Analyzed:** {metadata['signals_count']}\n")
+        f.write(f"**Context Loaded:** {metadata['context']}\n\n")
+        f.write("---\n\n")
+        f.write("# 🔍 Scout Report\n\n")
+        f.write(scout_output)
+        f.write("\n\n---\n\n")
+        f.write("# 🧠 Analyst Synthesis\n\n")
+        f.write(analyst_output)
+        f.write("\n\n---\n\n")
+        f.write("# 🏠 Homelab Opportunities\n\n")
+        f.write(homelab_output)
+        f.write("\n\n---\n\n")
+        f.write("# 💼 Work Opportunities\n\n")
+        f.write(work_output)
+        f.write("\n\n---\n\n")
+        f.write("*Generated by CrewAI Strategic Intelligence Crew (Criterion 5 Phase 2)*\n")
+
+    # === SAVE SLACK JSON OUTPUT WITH NUMBERED OPPORTUNITIES ===
+    slack_json_file = save_for_n8n_with_opportunities(
+        scout_output, analyst_output,
+        homelab_opportunities, work_opportunities,
+        metadata, f"output/slack_digest_{timestamp}.json"
+    )
+
+    print(f"\n\n[Crew] Markdown output saved to: {markdown_file}")
+    print(f"[Crew] Slack JSON output saved to: {slack_json_file}")
+    if all_opportunities:
+        print(f"[Crew] Opportunity IDs: {', '.join(sorted(all_opportunities.keys()))}")
+    print(f"[Crew] PHASE 2 COMPLETE - Verify numbered opportunities in Slack JSON")
+    print(f"[Crew] Execution complete!")
+    
+except Exception as e:
+    print(f"\n\n[ERROR] Crew execution failed: {str(e)}")
+    import traceback
+    traceback.print_exc()

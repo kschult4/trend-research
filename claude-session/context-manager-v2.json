@@ -1,0 +1,375 @@
+{
+  "name": "Context Manager (Trend Monitoring)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "context-manager",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "aa1b2c3d-4e5f-6789-0abc-def123456789",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        400
+      ],
+      "webhookId": "context-manager-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Slack message and extract command\nconst payload = $input.item.json;\nconst event = payload.event || {};\nconst text = event.text || payload.text || '';\nconst channel = event.channel || payload.channel || '';\nconst ts = event.ts || payload.ts || '';\nconst userId = event.user || payload.user || '';\n\n// Ignore bot messages\nif (event.bot_id || payload.bot_id) {\n  return { skip: true };\n}\n\n// Helper function to sanitize filename\nfunction sanitizeFilename(name) {\n  return name\n    .toLowerCase()\n    .replace(/[^a-z0-9\\s-]/g, '')\n    .replace(/\\s+/g, '-')\n    .replace(/-+/g, '-')\n    .trim();\n}\n\n// Initialize result\nlet commandType = 'unknown';\nlet projectName = '';\nlet description = '';\nlet content = '';\n\n// Command detection with case-insensitive matching\nconst lines = text.split('\\n');\nconst firstLine = lines[0] || '';\n\n// Check for \"Hot topic:\"\nif (/^hot topic:/i.test(firstLine)) {\n  commandType = 'hot_topic';\n  description = text.replace(/^hot topic:\\s*/i, '').trim();\n}\n// Check for \"New project:\"\nelse if (/^new project:/i.test(firstLine)) {\n  commandType = 'new_project';\n  const match = text.match(/^new project:\\s*(.+?)(?:\\n([\\s\\S]*))?$/i);\n  if (match) {\n    projectName = match[1].trim();\n    content = match[2]?.trim() || '';\n  }\n}\n// Check for \"Update [name]:\"\nelse if (/^update\\s+/i.test(firstLine)) {\n  const match = text.match(/^update\\s+(.+?):\\s*([\\s\\S]+)$/i);\n  if (match) {\n    commandType = 'update_project';\n    projectName = match[1].trim();\n    content = match[2].trim();\n  }\n}\n// Check for \"Transcript:\"\nelse if (/^transcript:/i.test(firstLine)) {\n  const match = text.match(/^transcript:\\s*(.+?)(?:\\n([\\s\\S]*))?$/i);\n  if (match) {\n    commandType = 'transcript';\n    projectName = match[1].trim();\n    content = match[2]?.trim() || text;\n  }\n}\n\n// Get current date\nconst now = new Date();\nconst dateStr = now.toISOString().split('T')[0];\nconst timestamp = now.toISOString().replace('T', ' ').split('.')[0];\n\nreturn {\n  commandType,\n  projectName,\n  description,\n  content,\n  filename: projectName ? sanitizeFilename(projectName) : '',\n  dateStr,\n  timestamp,\n  originalText: text,\n  channel,\n  threadTs: ts,\n  userId\n};"
+      },
+      "id": "bb2c3d4e-5f67-8901-2bcd-ef0234567890",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "hot_topic",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "hot_topic"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "new_project",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "new_project"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "update_project",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "update_project"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "transcript",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "transcript"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "cc3d4e5f-6789-0123-4def-567890abcdef",
+      "name": "Route by Command",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.1,
+      "position": [
+        600,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=ssh -o StrictHostKeyChecking=no root@192.168.1.18 \"if [ ! -s /context/hot_topics.md ]; then echo '# Hot Topics' > /context/hot_topics.md; echo '' >> /context/hot_topics.md; echo 'Leadership concerns, themes, and priorities.' >> /context/hot_topics.md; echo '' >> /context/hot_topics.md; fi; echo '- **{{ $json.dateStr }}:** {{ $json.description }}' >> /context/hot_topics.md; echo 'SUCCESS'\""
+      },
+      "id": "dd4e5f67-8901-2345-6789-0abcdef12345",
+      "name": "Add Hot Topic",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        800,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=ssh -o StrictHostKeyChecking=no root@192.168.1.18 \"if [ -f /context/briefs/{{ $json.filename }}.md ]; then echo 'ERROR: Brief already exists'; exit 1; fi; cat > /context/briefs/{{ $json.filename }}.md << 'EOF'\n# Project: {{ $json.projectName }}\n\n**Status:** Active\n**Last Updated:** {{ $json.dateStr }}\n\n## Summary\n{{ $json.content || 'TODO: Add summary' }}\n\n## My Role\nTODO: Define role\n\n## Key Stakeholders\nTODO: List stakeholders\n\n## Current Phase\nTODO: Describe current phase\n\n## Open Questions / Blockers\nTODO: List questions\n\n## Leadership Visibility\nTODO: Describe visibility\nEOF\nchmod 644 /context/briefs/{{ $json.filename }}.md; echo 'SUCCESS'\""
+      },
+      "id": "ee5f6789-0123-4567-89ab-cdef01234567",
+      "name": "Create New Project",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        800,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=ssh -o StrictHostKeyChecking=no root@192.168.1.18 \"if [ ! -f /context/briefs/{{ $json.filename }}.md ]; then echo 'ERROR: Brief not found'; exit 1; fi; cat >> /context/briefs/{{ $json.filename }}.md << 'EOF'\n\n---\n**Update:** {{ $json.timestamp }}\n\n{{ $json.content }}\nEOF\necho 'SUCCESS'\""
+      },
+      "id": "ff678901-2345-6789-abcd-ef0123456789",
+      "name": "Update Project",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        800,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=ssh -o StrictHostKeyChecking=no root@192.168.1.18 \"cat > /context/transcripts/{{ $json.dateStr }}-{{ $json.filename }}.md << 'EOF'\n# Transcript: {{ $json.projectName }}\n**Date:** {{ $json.dateStr }}\n\n{{ $json.content }}\nEOF\nchmod 644 /context/transcripts/{{ $json.dateStr }}-{{ $json.filename }}.md; echo 'SUCCESS'\""
+      },
+      "id": "00789012-3456-789a-bcde-f01234567890",
+      "name": "Create Transcript",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        800,
+        650
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format success message\nconst input = $input.item.json;\nlet message = '';\n\nif (input.commandType === 'hot_topic') {\n  message = '✅ Added hot topic to /context/hot_topics.md';\n} else if (input.commandType === 'new_project') {\n  message = `✅ Created brief: /context/briefs/${input.filename}.md`;\n} else if (input.commandType === 'update_project') {\n  message = `✅ Updated brief: /context/briefs/${input.filename}.md`;\n} else if (input.commandType === 'transcript') {\n  message = `✅ Saved transcript: /context/transcripts/${input.dateStr}-${input.filename}.md`;\n}\n\nreturn { ...input, message };"
+      },
+      "id": "11890123-4567-89ab-cdef-012345678901",
+      "name": "Format Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format error message for unknown command\nconst input = $input.item.json;\nconst message = `❌ Command not recognized. Valid formats:\n• New project: [name]\n• Update [name]: [changes]\n• Hot topic: [description]\n• Transcript: [meeting]`;\n\nreturn { ...input, message };"
+      },
+      "id": "22901234-5678-9abc-def0-123456789012",
+      "name": "Format Unknown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        650
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://hooks.slack.com/services/YOUR_WEBHOOK_URL_HERE",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"{{ $json.message }}\",\n  \"thread_ts\": \"{{ $json.threadTs }}\"\n}",
+        "options": {}
+      },
+      "id": "33012345-6789-abcd-ef01-234567890123",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        500
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "Route by Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Command": {
+      "main": [
+        [
+          {
+            "node": "Add Hot Topic",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create New Project",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Project",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Unknown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Hot Topic": {
+      "main": [
+        [
+          {
+            "node": "Format Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create New Project": {
+      "main": [
+        [
+          {
+            "node": "Format Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Project": {
+      "main": [
+        [
+          {
+            "node": "Format Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Transcript": {
+      "main": [
+        [
+          {
+            "node": "Format Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Success": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Unknown": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2026-02-01T00:00:00.000Z",
+  "versionId": "1"
+}

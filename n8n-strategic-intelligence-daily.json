@@ -1,0 +1,254 @@
+{
+  "name": "Strategic Intelligence Daily",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "cd /opt/crewai && source venv/bin/activate && python3 crew.py 2>&1",
+        "host": "192.168.1.18",
+        "user": "root"
+      },
+      "id": "ssh-execute-crew",
+      "name": "SSH Execute Crew",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [450, 300],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "1",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "cat $(ls -t /opt/crewai/output/slack_digest_*.json 2>/dev/null | head -1)",
+        "host": "192.168.1.18",
+        "user": "root"
+      },
+      "id": "ssh-read-json",
+      "name": "SSH Read JSON Output",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "1",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the JSON output from SSH\nconst jsonOutput = JSON.parse($input.first().json.stdout);\n\n// Return the slack_message field\nreturn {\n  slack_message: jsonOutput.slack_message,\n  timestamp: jsonOutput.timestamp,\n  sources_count: jsonOutput.sources_count,\n  signals_count: jsonOutput.signals_count\n};"
+      },
+      "id": "parse-json",
+      "name": "Parse JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.slackToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "#trend-monitoring"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.slack_message }}"
+            },
+            {
+              "name": "unfurl_links",
+              "value": "false"
+            },
+            {
+              "name": "unfurl_media",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "slack-post",
+      "name": "Slack Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1",
+          "name": "Slack Trend Reporting Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.stderr }}",
+              "operation": "contains",
+              "value2": "ERROR"
+            }
+          ]
+        }
+      },
+      "id": "check-errors",
+      "name": "Check for Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [650, 450]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.slackToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "#trend-monitoring"
+            },
+            {
+              "name": "text",
+              "value": "⚠️ Strategic Intelligence Crew execution failed\\n\\n```\\n={{ $json.stderr }}\\n```"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "slack-error",
+      "name": "Slack Error Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 550],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1",
+          "name": "Slack Trend Reporting Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "SSH Execute Crew",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH Execute Crew": {
+      "main": [
+        [
+          {
+            "node": "SSH Read JSON Output",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check for Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH Read JSON Output": {
+      "main": [
+        [
+          {
+            "node": "Parse JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse JSON": {
+      "main": [
+        [
+          {
+            "node": "Slack Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Errors": {
+      "main": [
+        [
+          {
+            "node": "Slack Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-02-02T03:30:00.000Z",
+  "versionId": "1"
+}

@@ -1,0 +1,151 @@
+{
+  "name": "Context Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "context-manager",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.item.json;\nconst body = payload.body || payload;\nconst command = body.command || payload.command || '';\nconst text = body.text || payload.text || '';\nconst userName = body.user_name || payload.user_name || 'unknown';\n\nfunction sanitizeFilename(name) {\n  return name.toLowerCase().replace(/[^a-z0-9\\s-]/g, '').replace(/\\s+/g, '-').replace(/-+/g, '-').trim();\n}\n\nlet commandType = 'unknown';\nlet projectName = '';\nlet description = '';\n\nif (command === '/interests') {\n  commandType = 'interests';\n  description = text.trim();\n} else if (command === '/newproject') {\n  commandType = 'new_project';\n  projectName = text.trim();\n}\n\nconst now = new Date();\nconst dateStr = now.toISOString().split('T')[0];\n\nreturn {\n  json: {\n    commandType,\n    projectName,\n    description,\n    filename: projectName ? sanitizeFilename(projectName) : '',\n    dateStr,\n    userName,\n    originalCommand: command,\n    originalText: text,\n    debug: JSON.stringify(payload)\n  }\n};"
+      },
+      "name": "Parse Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 400]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "interests",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "interests"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.commandType }}",
+                    "rightValue": "new_project",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "new_project"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.1,
+      "position": [600, 400]
+    },
+    {
+      "parameters": {
+        "command": "=mkdir -p /context && if [ ! -f /context/hot_topics.md ]; then echo '# Hot Topics' > /context/hot_topics.md; fi && echo '- **{{ $json.dateStr }}:** {{ $json.description }}' >> /context/hot_topics.md && echo 'SUCCESS'"
+      },
+      "name": "SSH Add Interest",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 300],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "KY7n4wvIfRTeFk7v",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=mkdir -p /context/briefs && echo '# Project: {{ $json.projectName }}' > '/context/briefs/{{ $json.filename }}.md' && echo 'Created: {{ $json.dateStr }}' >> '/context/briefs/{{ $json.filename }}.md' && echo 'SUCCESS'"
+      },
+      "name": "SSH New Project",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [800, 500],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "KY7n4wvIfRTeFk7v",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"text\": \"Added interest: {{ $('Parse Command').item.json.description }}\", \"response_type\": \"ephemeral\" }"
+      },
+      "name": "Respond Interest",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"text\": \"Created project: {{ $('Parse Command').item.json.projectName }}\", \"response_type\": \"ephemeral\" }"
+      },
+      "name": "Respond Project",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "name": "Respond Unknown",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [800, 650]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Parse Command", "type": "main", "index": 0 }]]
+    },
+    "Parse Command": {
+      "main": [[{ "node": "Route", "type": "main", "index": 0 }]]
+    },
+    "Route": {
+      "main": [
+        [{ "node": "SSH Add Interest", "type": "main", "index": 0 }],
+        [{ "node": "SSH New Project", "type": "main", "index": 0 }],
+        [{ "node": "Respond Unknown", "type": "main", "index": 0 }]
+      ]
+    },
+    "SSH Add Interest": {
+      "main": [[{ "node": "Respond Interest", "type": "main", "index": 0 }]]
+    },
+    "SSH New Project": {
+      "main": [[{ "node": "Respond Project", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {}
+}
