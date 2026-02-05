@@ -1,0 +1,557 @@
+{
+  "name": "Approval Poller and Catalyst Trigger",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 * * * *"
+            }
+          ]
+        }
+      },
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "id": "schedule-trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/conversations.history",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer xoxb-9570960523936-10431921181313-gdijmNyeLV1yBrVRRxJSOEiF"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"C0ABUP7MHMM\",\n  \"limit\": 10,\n  \"oldest\": \"{{ $now.minus(24, 'hours').toUnixInteger() }}\"\n}",
+        "options": {}
+      },
+      "name": "Get Today's Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300],
+      "id": "get-digest"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Find digest message that has replies (user approvals)\nconst messages = $input.first().json.messages || [];\n\nconst botMessages = messages.filter(m =>\n  m.text && m.text.includes('Strategic Intelligence Digest')\n);\n\nif (botMessages.length === 0) {\n  return [{\n    json: {\n      digest_found: false,\n      reason: 'No digest found in last 24 hours'\n    }\n  }];\n}\n\n// Prefer digest with replies, otherwise use the oldest (main) digest\nlet digest = botMessages.find(m => m.reply_count > 0) || botMessages[botMessages.length - 1];\nconst digestDate = new Date(parseFloat(digest.ts) * 1000).toISOString().split('T')[0];\n\nreturn [{\n  json: {\n    digest_found: true,\n    digest_ts: digest.ts,\n    digest_date: digestDate,\n    digest_text: digest.text\n  }\n}];"
+      },
+      "name": "Parse Digest Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "id": "parse-digest"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.digest_found }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Check Digest Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "id": "check-digest-found"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pass digest data to Get Replies - use $input for reliable data access\nconst digestData = $input.first().json;\n\nif (!digestData || !digestData.digest_ts) {\n  return [{\n    json: {\n      DEBUG_ERROR: 'No digest_ts in input',\n      input_keys: digestData ? Object.keys(digestData) : [],\n      raw: JSON.stringify(digestData || {}).substring(0, 300)\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    channel: 'C0ABUP7MHMM',\n    ts: digestData.digest_ts,\n    limit: 100,\n    digest_date: digestData.digest_date,\n    digest_text: digestData.digest_text\n  }\n}];"
+      },
+      "name": "Prepare Get Replies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [950, 200],
+      "id": "prepare-get-replies"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://slack.com/api/conversations.replies",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer xoxb-9570960523936-10431921181313-gdijmNyeLV1yBrVRRxJSOEiF"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "={{ $json.channel }}"
+            },
+            {
+              "name": "ts",
+              "value": "={{ $json.ts }}"
+            },
+            {
+              "name": "limit",
+              "value": "={{ $json.limit }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Get Replies",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1150, 200],
+      "id": "get-replies"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get data from previous nodes\nconst replies = $input.first().json.messages || [];\nconst digestData = $('Parse Digest Response').first().json;\nconst kyleUserId = \"U09GDG5LACR\";\n\n// Filter for Kyle's replies (not bot, not original digest)\nconst userReplies = replies.filter(r =>\n  r.user === kyleUserId &&\n  r.ts !== digestData.digest_ts\n);\n\nif (userReplies.length === 0) {\n  return [{\n    json: {\n      has_replies: false,\n      reason: 'No user replies found'\n    }\n  }];\n}\n\n// Return one item per reply for processing\nreturn userReplies.map(reply => ({\n  json: {\n    has_replies: true,\n    digest_date: digestData.digest_date,\n    digest_ts: digestData.digest_ts,\n    reply_text: reply.text,\n    reply_ts: reply.ts,\n    user_id: reply.user\n  }\n}));"
+      },
+      "name": "Filter User Replies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 200],
+      "id": "filter-replies"
+    },
+    {
+      "parameters": {
+        "command": "=cd /opt/crewai && python3 -c \"\nfrom tools.approval_parser import parse_approval_syntax\nimport json\ntext = '''{{ $json.reply_text }}'''\nresult = parse_approval_syntax(text)\n# Include context in output\noutput = {\n    **result,\n    'digest_date': '{{ $json.digest_date }}',\n    'digest_ts': '{{ $json.digest_ts }}',\n    'reply_ts': '{{ $json.reply_ts }}',\n    'user_id': '{{ $json.user_id }}'\n}\nprint(json.dumps(output))\n\""
+      },
+      "name": "Parse Approval Syntax",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1450, 200],
+      "id": "parse-approval",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SSH_CREDENTIAL_ID",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.stdout }}",
+              "operation": "contains",
+              "value2": "\"valid\": true"
+            }
+          ]
+        }
+      },
+      "name": "Check Valid Approval",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1650, 200],
+      "id": "check-valid"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process all items and extract valid approvals\nconst allItems = $input.all();\nconst results = [];\n\nfor (const item of allItems) {\n  const stdout = item.json.stdout || '';\n  \n  let parsed;\n  try {\n    parsed = JSON.parse(stdout);\n  } catch(e) {\n    continue; // Skip items that fail to parse\n  }\n  \n  // Skip invalid approvals\n  if (!parsed.valid || !parsed.approvals || parsed.approvals.length === 0) {\n    continue;\n  }\n  \n  // Extract each approval\n  for (const approval of parsed.approvals) {\n    results.push({\n      json: {\n        digest_date: parsed.digest_date,\n        digest_ts: parsed.digest_ts,\n        reply_ts: parsed.reply_ts,\n        user_id: parsed.user_id,\n        opp_id: approval.opp_id,\n        deliverable_type: approval.type,\n        action: parsed.action\n      }\n    });\n  }\n}\n\nreturn results;"
+      },
+      "name": "Extract Approvals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 100],
+      "id": "extract-approvals"
+    },
+    {
+      "parameters": {
+        "command": "=digest_date=\"{{ $json.digest_date }}\"\nopp_id=\"{{ $json.opp_id }}\"\ndigest_ts=\"{{ $json.digest_ts }}\"\nreply_ts=\"{{ $json.reply_ts }}\"\nuser_id=\"{{ $json.user_id }}\"\ndeliverable_type=\"{{ $json.deliverable_type }}\"\naction=\"{{ $json.action }}\"\n\nif [ -f \"/opt/crewai/output/opportunities_${digest_date}.json\" ]; then\n  python3 -c \"\nimport json\nwith open('/opt/crewai/output/opportunities_${digest_date}.json') as f:\n    data = json.load(f)\nresult = {'digest_date': '${digest_date}', 'digest_ts': '${digest_ts}', 'reply_ts': '${reply_ts}', 'user_id': '${user_id}', 'opp_id': '${opp_id}', 'deliverable_type': '${deliverable_type}', 'action': '${action}'}\nif '${opp_id}' in data.get('opportunities', {}):\n    result['exists'] = True\nelse:\n    result['exists'] = False\n    result['error'] = 'Opportunity ${opp_id} not found'\nprint(json.dumps(result))\n\"\nelse\n  echo '{\"exists\": false, \"error\": \"No opportunities file for ${digest_date}\", \"digest_date\": \"'\"$digest_date\"'\", \"digest_ts\": \"'\"$digest_ts\"'\", \"reply_ts\": \"'\"$reply_ts\"'\", \"user_id\": \"'\"$user_id\"'\", \"opp_id\": \"'\"$opp_id\"'\", \"deliverable_type\": \"'\"$deliverable_type\"'\", \"action\": \"'\"$action\"'\"}'\nfi"
+      },
+      "name": "Validate Opportunity Exists",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [2050, 100],
+      "id": "validate-opp",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SSH_CREDENTIAL_ID",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.stdout }}",
+              "operation": "contains",
+              "value2": "\"exists\": true"
+            }
+          ]
+        }
+      },
+      "name": "Check Opportunity Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2250, 100],
+      "id": "check-opp-exists"
+    },
+    {
+      "parameters": {
+        "command": "=python3 << 'PYEOF'\nimport json\nimport os\nimport sys\n\ntry:\n    raw_input = '''{{ $json.stdout }}'''\n    ctx = json.loads(raw_input)\nexcept Exception as e:\n    print(json.dumps({'error': f'Check for Duplicates parse failed: {e}', 'raw_input': raw_input[:200] if raw_input else 'EMPTY'}))\n    sys.exit(0)\n\ndigest_date = ctx.get('digest_date', '')\nopp_id = ctx.get('opp_id', '')\n\nalready_processed = False\napprovals_file = '/opt/crewai/output/approvals.jsonl'\nif os.path.exists(approvals_file):\n    with open(approvals_file) as f:\n        for line in f:\n            try:\n                rec = json.loads(line)\n                if (rec.get('digest_date') == digest_date and\n                    rec.get('opportunity_id') == opp_id and\n                    rec.get('status') == 'delivered'):\n                    already_processed = True\n                    break\n            except:\n                pass\n\nctx['already_processed'] = already_processed\nprint(json.dumps(ctx))\nPYEOF"
+      },
+      "name": "Check for Duplicates",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [2450, 0],
+      "id": "check-duplicates",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SSH_CREDENTIAL_ID",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.stdout }}",
+              "operation": "contains",
+              "value2": "\"already_processed\": false"
+            }
+          ]
+        }
+      },
+      "name": "Filter New Approvals",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2650, 0],
+      "id": "filter-new"
+    },
+    {
+      "parameters": {
+        "command": "=python3 << 'PYEOF'\nimport json\nfrom datetime import datetime\nimport sys\n\ntry:\n    raw_input = '''{{ $json.stdout }}'''\n    ctx = json.loads(raw_input)\nexcept Exception as e:\n    print(json.dumps({'error': f'Log Approval parse failed: {e}', 'raw_input': raw_input[:200] if raw_input else 'EMPTY'}))\n    sys.exit(0)\n\ndigest_date = ctx.get('digest_date', '')\nopp_id = ctx.get('opp_id', '')\ndeliverable_type = ctx.get('deliverable_type', '')\nuser_id = ctx.get('user_id', '')\nreply_ts = ctx.get('reply_ts', '')\ndigest_ts = ctx.get('digest_ts', '')\n\n# Log the approval\nlog_entry = {\n    'timestamp': datetime.now().isoformat(),\n    'digest_date': digest_date,\n    'opportunity_id': opp_id,\n    'deliverable_type': deliverable_type,\n    'status': 'approved',\n    'slack_user': user_id,\n    'slack_message_ts': reply_ts\n}\n\nwith open('/opt/crewai/output/approvals.jsonl', 'a') as f:\n    f.write(json.dumps(log_entry) + '\\n')\n\n# Output context for next node\nctx['logged'] = True\nprint(json.dumps(ctx))\nPYEOF"
+      },
+      "name": "Log Approval",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [2850, -100],
+      "id": "log-approval",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SSH_CREDENTIAL_ID",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse context from Log Approval stdout\nconst stdout = $json.stdout || '';\n\nlet ctx;\ntry {\n  ctx = JSON.parse(stdout);\n} catch(e) {\n  return [{ json: { error: 'Failed to parse Log Approval output', raw: stdout.substring(0, 300) } }];\n}\n\nreturn [{\n  json: {\n    digest_date: ctx.digest_date || '',\n    digest_ts: ctx.digest_ts || '',\n    opp_id: ctx.opp_id || '',\n    deliverable_type: ctx.deliverable_type || '',\n    reply_ts: ctx.reply_ts || '',\n    user_id: ctx.user_id || ''\n  }\n}];"
+      },
+      "name": "Parse Log Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2950, -100],
+      "id": "parse-log-context"
+    },
+    {
+      "parameters": {
+        "command": "=cd /opt/crewai\nsource venv/bin/activate\n\n# Get values from parsed context\npython3 catalyst.py --digest-date \"{{ $json.digest_date }}\" --opportunity \"{{ $json.opp_id }}\" --type \"{{ $json.deliverable_type }}\" 2>&1",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "name": "Trigger Catalyst",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [3150, -100],
+      "id": "trigger-catalyst",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SSH_CREDENTIAL_ID",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = $json.stdout || '';\n\n// Get digest_ts from Parse Log Context node\nconst digestTs = $('Parse Log Context').first().json.digest_ts || '';\n\nconst startMarker = '[Catalyst] === OUTPUT START ===';\nconst endMarker = '[Catalyst] === OUTPUT END ===';\n\nconst startIdx = stdout.indexOf(startMarker);\nconst endIdx = stdout.indexOf(endMarker);\n\nif (startIdx === -1 || endIdx === -1) {\n  return [{\n    json: {\n      success: false,\n      error: 'Could not parse Catalyst output markers',\n      raw_output: stdout.substring(stdout.length - 500),\n      digest_ts: digestTs\n    }\n  }];\n}\n\nconst jsonStr = stdout.substring(startIdx + startMarker.length, endIdx).trim();\n\ntry {\n  const result = JSON.parse(jsonStr);\n  // Catalyst now outputs: digest_date, opp_id, deliverable_type, success, deliverable_file, deliverable_content, opportunity_title\n  return [{\n    json: {\n      ...result,\n      digest_ts: digestTs\n    }\n  }];\n} catch (e) {\n  return [{\n    json: {\n      success: false,\n      error: 'Failed to parse Catalyst JSON: ' + e.message,\n      raw_json: jsonStr.substring(0, 500),\n      digest_ts: digestTs\n    }\n  }];\n}"
+      },
+      "name": "Parse Catalyst Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3350, -100],
+      "id": "parse-catalyst"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Check Catalyst Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3550, -100],
+      "id": "check-success"
+    },
+    {
+      "parameters": {
+        "jsCode": "const deliverable = $json.deliverable_content || '';\nconst oppTitle = $json.opportunity_title || 'Unknown';\nconst oppId = $json.opp_id || '';\nconst type = $json.deliverable_type || '';\n\nconst typeEmoji = {\n  'plan': '🔧',\n  'brief': '📋',\n  'slide': '📊'\n}[type] || '📄';\n\nconst typeLabel = {\n  'plan': 'Technical Plan',\n  'brief': 'Leadership Brief',\n  'slide': 'Client Slide'\n}[type] || 'Deliverable';\n\nconst message = `${typeEmoji} *${typeLabel} for [${oppId}] ${oppTitle}*\\n\\n${deliverable}`;\n\nreturn [{\n  json: {\n    slack_message: message,\n    thread_ts: $json.digest_ts,\n    deliverable_file: $json.deliverable_file,\n    digest_date: $json.digest_date,\n    opp_id: $json.opp_id,\n    deliverable_type: $json.deliverable_type\n  }\n}];"
+      },
+      "name": "Format Deliverable for Slack",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3750, -200],
+      "id": "format-deliverable"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer xoxb-9570960523936-10431921181313-gdijmNyeLV1yBrVRRxJSOEiF"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"C0ABUP7MHMM\",\n  \"thread_ts\": \"{{ $json.thread_ts }}\",\n  \"text\": {{ JSON.stringify($json.slack_message) }}\n}",
+        "options": {}
+      },
+      "name": "Post to Slack Thread",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [3950, -200],
+      "id": "post-slack"
+    },
+    {
+      "parameters": {
+        "command": "=cd /opt/crewai\n\n# Get context from Format Deliverable for Slack node\ndigest_date=\"{{ $('Format Deliverable for Slack').first().json.digest_date }}\"\nopp_id=\"{{ $('Format Deliverable for Slack').first().json.opp_id }}\"\ndeliverable_type=\"{{ $('Format Deliverable for Slack').first().json.deliverable_type }}\"\ndeliverable_file=\"{{ $('Format Deliverable for Slack').first().json.deliverable_file }}\"\n\ntimestamp=$(date -Iseconds)\necho \"{\\\"timestamp\\\": \\\"$timestamp\\\", \\\"digest_date\\\": \\\"$digest_date\\\", \\\"opportunity_id\\\": \\\"$opp_id\\\", \\\"deliverable_type\\\": \\\"$deliverable_type\\\", \\\"status\\\": \\\"delivered\\\", \\\"catalyst_file\\\": \\\"$deliverable_file\\\"}\" >> output/approvals.jsonl\n\necho '{\"logged\": true}'"
+      },
+      "name": "Update Approval Log - Delivered",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [4150, -200],
+      "id": "log-delivered",
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SSH_CREDENTIAL_ID",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer xoxb-9570960523936-10431921181313-gdijmNyeLV1yBrVRRxJSOEiF"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"C0ABUP7MHMM\",\n  \"thread_ts\": \"{{ $json.digest_ts }}\",\n  \"text\": \"⚠️ Invalid approval syntax. Here's how to use it:\\n\\n*Homelab opportunities:*\\n  • `approve H1` (generates Technical Plan)\\n\\n*Work opportunities:*\\n  • `approve W1 brief` (generates Leadership Brief)\\n  • `approve W2 slide` (generates Client Slide)\\n\\n*Multiple approvals:*\\n  • `approve H1, W1 brief, W2 slide`\\n\\n*Dismiss:*\\n  • `dismiss H1` or `dismiss W2`\"\n}",
+        "options": {}
+      },
+      "name": "Post Invalid Syntax Help",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1850, 300],
+      "id": "post-invalid-syntax"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = $json.stdout || '';\nconst parsed = JSON.parse(stdout);\nconst oppId = parsed.opp_id || '';\nconst digestTs = parsed.digest_ts || '';\n\nreturn [{\n  json: {\n    error_message: `❌ Opportunity **${oppId}** not found in today's digest. Please check the opportunity ID and try again.`,\n    digest_ts: digestTs\n  }\n}];"
+      },
+      "name": "Format Opportunity Not Found",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 200],
+      "id": "format-not-found"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer xoxb-9570960523936-10431921181313-gdijmNyeLV1yBrVRRxJSOEiF"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"C0ABUP7MHMM\",\n  \"thread_ts\": \"{{ $json.digest_ts }}\",\n  \"text\": \"{{ $json.error_message }}\"\n}",
+        "options": {}
+      },
+      "name": "Post Opportunity Not Found",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2650, 200],
+      "id": "post-not-found"
+    },
+    {
+      "parameters": {
+        "jsCode": "// These fields come from Parse Catalyst Output which now includes context\nconst error = $json.error || 'Unknown error';\nconst oppId = $json.opp_id || '';\nconst digestTs = $json.digest_ts || '';\n\nreturn [{\n  json: {\n    error_message: `❌ Failed to generate deliverable for **${oppId}**\\n\\nError: ${error}\\n\\nPlease try again or contact support.`,\n    digest_ts: digestTs\n  }\n}];"
+      },
+      "name": "Format Catalyst Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3750, 0],
+      "id": "format-error"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer xoxb-9570960523936-10431921181313-gdijmNyeLV1yBrVRRxJSOEiF"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"C0ABUP7MHMM\",\n  \"thread_ts\": \"{{ $json.digest_ts }}\",\n  \"text\": \"{{ $json.error_message }}\"\n}",
+        "options": {}
+      },
+      "name": "Post Catalyst Error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [3950, 0],
+      "id": "post-error"
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [[{"node": "Get Today's Digest", "type": "main", "index": 0}]]
+    },
+    "Get Today's Digest": {
+      "main": [[{"node": "Parse Digest Response", "type": "main", "index": 0}]]
+    },
+    "Parse Digest Response": {
+      "main": [[{"node": "Check Digest Found", "type": "main", "index": 0}]]
+    },
+    "Check Digest Found": {
+      "main": [[{"node": "Prepare Get Replies", "type": "main", "index": 0}], []]
+    },
+    "Prepare Get Replies": {
+      "main": [[{"node": "Get Replies", "type": "main", "index": 0}]]
+    },
+    "Get Replies": {
+      "main": [[{"node": "Filter User Replies", "type": "main", "index": 0}]]
+    },
+    "Filter User Replies": {
+      "main": [[{"node": "Parse Approval Syntax", "type": "main", "index": 0}]]
+    },
+    "Parse Approval Syntax": {
+      "main": [[{"node": "Check Valid Approval", "type": "main", "index": 0}]]
+    },
+    "Check Valid Approval": {
+      "main": [[{"node": "Extract Approvals", "type": "main", "index": 0}], [{"node": "Post Invalid Syntax Help", "type": "main", "index": 0}]]
+    },
+    "Extract Approvals": {
+      "main": [[{"node": "Validate Opportunity Exists", "type": "main", "index": 0}]]
+    },
+    "Validate Opportunity Exists": {
+      "main": [[{"node": "Check Opportunity Exists", "type": "main", "index": 0}]]
+    },
+    "Check Opportunity Exists": {
+      "main": [[{"node": "Check for Duplicates", "type": "main", "index": 0}], [{"node": "Format Opportunity Not Found", "type": "main", "index": 0}]]
+    },
+    "Check for Duplicates": {
+      "main": [[{"node": "Filter New Approvals", "type": "main", "index": 0}]]
+    },
+    "Filter New Approvals": {
+      "main": [[{"node": "Log Approval", "type": "main", "index": 0}], []]
+    },
+    "Log Approval": {
+      "main": [[{"node": "Parse Log Context", "type": "main", "index": 0}]]
+    },
+    "Parse Log Context": {
+      "main": [[{"node": "Trigger Catalyst", "type": "main", "index": 0}]]
+    },
+    "Trigger Catalyst": {
+      "main": [[{"node": "Parse Catalyst Output", "type": "main", "index": 0}]]
+    },
+    "Parse Catalyst Output": {
+      "main": [[{"node": "Check Catalyst Success", "type": "main", "index": 0}]]
+    },
+    "Check Catalyst Success": {
+      "main": [[{"node": "Format Deliverable for Slack", "type": "main", "index": 0}], [{"node": "Format Catalyst Error", "type": "main", "index": 0}]]
+    },
+    "Format Deliverable for Slack": {
+      "main": [[{"node": "Post to Slack Thread", "type": "main", "index": 0}]]
+    },
+    "Post to Slack Thread": {
+      "main": [[{"node": "Update Approval Log - Delivered", "type": "main", "index": 0}]]
+    },
+    "Format Opportunity Not Found": {
+      "main": [[{"node": "Post Opportunity Not Found", "type": "main", "index": 0}]]
+    },
+    "Format Catalyst Error": {
+      "main": [[{"node": "Post Catalyst Error", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-02-03T18:00:00.000Z",
+  "versionId": "12"
+}

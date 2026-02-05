@@ -1,0 +1,289 @@
+{
+  "name": "Strategic Intelligence Daily v2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-v2",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger-v2",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 450]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "cd /opt/crewai && source venv/bin/activate && python3 crew.py 2>&1 | tail -30",
+        "host": "192.168.1.18",
+        "user": "root"
+      },
+      "id": "ssh-execute-crew-v2",
+      "name": "SSH Execute Crew",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [500, 350],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "1",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "cat $(ls -t /opt/crewai/output/slack_messages_*.json 2>/dev/null | head -1)",
+        "host": "192.168.1.18",
+        "user": "root"
+      },
+      "id": "ssh-read-json-v2",
+      "name": "SSH Read Phase 2 JSON",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [750, 350],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "1",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the Phase 2 JSON output from SSH\nconst data = JSON.parse($input.first().json.stdout);\n\n// Return the entire data object\n// This includes: timestamp, sources_count, signals_count, summary, messages\nreturn [{ json: data }];"
+      },
+      "id": "parse-phase2-json",
+      "name": "Parse Phase 2 JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 350]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "messages",
+        "options": {}
+      },
+      "id": "split-messages",
+      "name": "Split Messages Array",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [1250, 350]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.slackToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"#trend-monitoring\",\n  \"blocks\": {{ JSON.stringify($json.slack_blocks) }}\n}",
+        "options": {}
+      },
+      "id": "slack-post-message-v2",
+      "name": "Slack Post Message with Blocks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1500, 350],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1",
+          "name": "Slack Trend Reporting Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "error-check-condition",
+              "leftValue": "={{ $json.stderr }}",
+              "rightValue": "ERROR",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-crew-errors",
+      "name": "Check for Crew Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [750, 550]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.slackToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "#trend-monitoring"
+            },
+            {
+              "name": "text",
+              "value": "⚠️ Strategic Intelligence Crew v2 execution failed\\n\\n```\\n={{ $json.stderr }}\\n```"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "slack-error-notification-v2",
+      "name": "Slack Error Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 650],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1",
+          "name": "Slack Trend Reporting Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "SSH Execute Crew",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "SSH Execute Crew",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH Execute Crew": {
+      "main": [
+        [
+          {
+            "node": "SSH Read Phase 2 JSON",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check for Crew Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH Read Phase 2 JSON": {
+      "main": [
+        [
+          {
+            "node": "Parse Phase 2 JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Phase 2 JSON": {
+      "main": [
+        [
+          {
+            "node": "Split Messages Array",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Messages Array": {
+      "main": [
+        [
+          {
+            "node": "Slack Post Message with Blocks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Crew Errors": {
+      "main": [
+        [
+          {
+            "node": "Slack Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 2,
+  "updatedAt": "2026-02-04T23:30:00.000Z",
+  "versionId": "2.1"
+}

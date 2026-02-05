@@ -1,0 +1,300 @@
+{
+  "name": "Slack Button Handler - Phase 3 (Fixed)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "slack-button-handler",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "slack-button-handler"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "",
+        "options": {}
+      },
+      "id": "respond-immediately",
+      "name": "Respond Immediately",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Slack button interaction payload\nconst payload = $input.first().json.body;\n\n// Extract action information\nconst action = payload.actions[0];\nconst actionId = action.action_id;  // e.g., \"develop_H1\" or \"ignore_H2\"\nconst opportunityId = action.value;  // e.g., \"H1\"\nconst responseUrl = payload.response_url;\n\n// Determine action type\nconst actionType = actionId.split('_')[0];  // \"develop\" or \"ignore\"\n\n// Get today's date for digest lookup\nconst today = new Date().toISOString().split('T')[0];  // YYYY-MM-DD\n\n// Extract user info\nconst user = payload.user.name || payload.user.id;\n\nreturn [{\n  json: {\n    action_type: actionType,\n    opportunity_id: opportunityId,\n    response_url: responseUrl,\n    digest_date: today,\n    user: user,\n    message_ts: payload.message.ts,\n    original_payload: payload\n  }\n}];"
+      },
+      "id": "parse-button-action",
+      "name": "Parse Button Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.response_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"replace_original\": true,\n  \"text\": \"⏳ Processing [{{ $json.opportunity_id }}]...\",\n  \"blocks\": [\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"⏳ *Processing [{{ $json.opportunity_id }}]...*\\n\\n_This may take 30-60 seconds._\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "ack-processing",
+      "name": "Acknowledge - Processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "route-develop",
+              "leftValue": "={{ $json.action_type }}",
+              "rightValue": "develop",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-by-action",
+      "name": "Route by Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "cd /opt/crewai && source venv/bin/activate && python3 catalyst.py --digest-date {{ $json.digest_date }} --opportunity {{ $json.opportunity_id }} --type plan 2>&1",
+        "host": "192.168.1.18",
+        "user": "root"
+      },
+      "id": "run-catalyst",
+      "name": "Run Catalyst",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1300, 200],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "1",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Catalyst output\nconst stdout = $input.first().json.stdout;\n\n// Extract JSON from OUTPUT START/END markers\nconst startMarker = '[Catalyst] === OUTPUT START ===';\nconst endMarker = '[Catalyst] === OUTPUT END ===';\n\nconst startIdx = stdout.indexOf(startMarker);\nconst endIdx = stdout.indexOf(endMarker);\n\nif (startIdx === -1 || endIdx === -1) {\n  throw new Error('Could not find Catalyst output markers');\n}\n\nconst jsonStr = stdout.substring(startIdx + startMarker.length, endIdx).trim();\nconst catalystOutput = JSON.parse(jsonStr);\n\n// Get previous data\nconst previousData = $input.first().json;\n\nreturn [{\n  json: {\n    ...previousData,\n    catalyst_success: catalystOutput.success,\n    markdown_file: catalystOutput.markdown_file,\n    opportunity_title: catalystOutput.opportunity_title,\n    deliverable_content: catalystOutput.deliverable_content\n  }\n}];"
+      },
+      "id": "parse-catalyst-output",
+      "name": "Parse Catalyst Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1550, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.response_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"replace_original\": true,\n  \"text\": \"✅ Technical Plan generated for [{{ $json.opportunity_id }}]\",\n  \"blocks\": [\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"✅ *Technical Plan generated for [{{ $json.opportunity_id }}]*\\n\\n*{{ $json.opportunity_title }}*\\n\\n📁 Check Obsidian: `_crewai-outputs/`\\n\\nFile will sync within ~15 seconds.\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "update-slack-develop",
+      "name": "Update Slack - Develop Success",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1800, 200]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "echo \"{{ $now.toISO() }},{{ $json.opportunity_id }},{{ $json.user }}\" >> /opt/crewai/logs/ignored_opportunities.log",
+        "host": "192.168.1.18",
+        "user": "root"
+      },
+      "id": "log-ignore-action",
+      "name": "Log Ignore Action",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1300, 400],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "1",
+          "name": "Container 118 SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.response_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"replace_original\": true,\n  \"text\": \"🚫 Opportunity [{{ $json.opportunity_id }}] marked as ignored\",\n  \"blocks\": [\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"🚫 *[{{ $json.opportunity_id }}] marked as ignored*\\n\\n_No further action will be taken._\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "update-slack-ignore",
+      "name": "Update Slack - Ignored",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1550, 400]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Respond Immediately",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Immediately": {
+      "main": [
+        [
+          {
+            "node": "Parse Button Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Button Action": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge - Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acknowledge - Processing": {
+      "main": [
+        [
+          {
+            "node": "Route by Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Action": {
+      "main": [
+        [
+          {
+            "node": "Run Catalyst",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Ignore Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Catalyst": {
+      "main": [
+        [
+          {
+            "node": "Parse Catalyst Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Catalyst Output": {
+      "main": [
+        [
+          {
+            "node": "Update Slack - Develop Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Ignore Action": {
+      "main": [
+        [
+          {
+            "node": "Update Slack - Ignored",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "errorWorkflow": "",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-02-05T00:00:00.000Z",
+  "versionId": "3.0"
+}
