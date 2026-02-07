@@ -1,5 +1,5 @@
 {
-  "name": "Slack Button Handler - Phase 3 v2.1 (Fixed Routing)",
+  "name": "Slack Button Handler - Phase 3 v3 (IF Routing)",
   "nodes": [
     {
       "parameters": {
@@ -29,7 +29,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse Slack button interaction payload\n// Slack sends as form-urlencoded with a 'payload' field containing JSON\nconst inputData = $input.first().json;\n\n// Debug: log what we received\nconst debugInfo = {\n  keys: Object.keys(inputData),\n  hasBody: !!inputData.body,\n  hasPayload: !!inputData.payload,\n  bodyType: typeof inputData.body,\n  payloadType: typeof inputData.payload\n};\n\nlet payload;\n\n// Try different ways Slack might send the data\nif (inputData.payload) {\n  // Form-encoded: payload is a JSON string\n  payload = typeof inputData.payload === 'string' ? JSON.parse(inputData.payload) : inputData.payload;\n} else if (inputData.body && inputData.body.payload) {\n  // Nested in body.payload\n  payload = typeof inputData.body.payload === 'string' ? JSON.parse(inputData.body.payload) : inputData.body.payload;\n} else if (inputData.body && inputData.body.actions) {\n  // Direct JSON in body\n  payload = inputData.body;\n} else if (inputData.actions) {\n  // Direct at root level\n  payload = inputData;\n} else {\n  // Return debug info if we can't find the payload\n  return [{ json: { error: 'Could not find Slack payload', debug: debugInfo, raw: JSON.stringify(inputData).substring(0, 1000) } }];\n}\n\n// Extract action information\nconst action = payload.actions[0];\nconst actionId = action.action_id;\nconst opportunityId = action.value;\nconst actionType = actionId.split('_')[0];\n\n// Get today's date for digest lookup\nconst today = new Date().toISOString().split('T')[0];\n\n// Extract user and channel info\nconst user = payload.user.name || payload.user.id;\nconst channel = payload.channel.id;\nconst messageTs = payload.message.ts;\n\nreturn [{\n  json: {\n    action_type: actionType,\n    opportunity_id: opportunityId,\n    channel: channel,\n    message_ts: messageTs,\n    digest_date: today,\n    user: user\n  }\n}];"
+        "jsCode": "// Parse Slack button interaction payload\nconst inputData = $input.first().json;\n\nlet payload;\n\n// Try different ways Slack might send the data\nif (inputData.payload) {\n  payload = typeof inputData.payload === 'string' ? JSON.parse(inputData.payload) : inputData.payload;\n} else if (inputData.body && inputData.body.payload) {\n  payload = typeof inputData.body.payload === 'string' ? JSON.parse(inputData.body.payload) : inputData.body.payload;\n} else if (inputData.body && inputData.body.actions) {\n  payload = inputData.body;\n} else if (inputData.actions) {\n  payload = inputData;\n} else {\n  return [{ json: { error: 'Could not find Slack payload', raw: JSON.stringify(inputData).substring(0, 1000) } }];\n}\n\n// Extract action information\nconst action = payload.actions[0];\nconst actionId = action.action_id;\nconst opportunityId = action.value;\nconst actionType = actionId.split('_')[0];\n\n// Get today's date for digest lookup\nconst today = new Date().toISOString().split('T')[0];\n\n// Extract user and channel info\nconst user = payload.user.name || payload.user.id;\nconst channel = payload.channel.id;\nconst messageTs = payload.message.ts;\n\nreturn [{\n  json: {\n    action_type: actionType,\n    is_develop: actionType === 'develop',\n    opportunity_id: opportunityId,\n    channel: channel,\n    message_ts: messageTs,\n    digest_date: today,\n    user: user\n  }\n}];"
       },
       "id": "parse-button-action",
       "name": "Parse Button Action",
@@ -67,7 +67,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Pass through the parsed data, adding Slack response info\nconst input = $('Parse Button Action').first().json;\nconst slackResponse = $input.first().json;\n\nreturn [{\n  json: {\n    ...input,\n    ack_ok: slackResponse.ok\n  }\n}];"
+        "jsCode": "// Restore the parsed data (HTTP request loses it)\nconst input = $('Parse Button Action').first().json;\nconst slackResponse = $input.first().json;\n\nreturn [{\n  json: {\n    ...input,\n    ack_ok: slackResponse.ok\n  }\n}];"
       },
       "id": "merge-context",
       "name": "Merge Context",
@@ -85,30 +85,29 @@
           },
           "conditions": [
             {
-              "id": "route-develop",
-              "leftValue": "={{ $json.action_type }}",
-              "rightValue": "develop",
+              "id": "is-develop",
+              "leftValue": "={{ $json.is_develop }}",
+              "rightValue": true,
               "operator": {
-                "type": "string",
+                "type": "boolean",
                 "operation": "equals"
               }
             }
           ],
           "combinator": "and"
         },
-        "fallbackOutput": "extra",
         "options": {}
       },
-      "id": "route-by-action",
-      "name": "Route by Action",
-      "type": "n8n-nodes-base.switch",
-      "typeVersion": 3,
+      "id": "if-develop",
+      "name": "IF Develop",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
       "position": [1250, 300]
     },
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "cd /opt/crewai && source venv/bin/activate && python3 catalyst.py --digest-date {{ $json.digest_date }} --opportunity {{ $json.opportunity_id }} --type plan 2>&1",
+        "command": "=cd /opt/crewai && source venv/bin/activate && python3 catalyst.py --digest-date {{ $json.digest_date }} --opportunity {{ $json.opportunity_id }} --type plan 2>&1",
         "host": "192.168.1.18",
         "user": "root"
       },
@@ -126,7 +125,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse Catalyst output\nconst stdout = $input.first().json.stdout;\nconst previousData = $('Merge Context').first().json;\n\n// Extract JSON from OUTPUT START/END markers\nconst startMarker = '[Catalyst] === OUTPUT START ===';\nconst endMarker = '[Catalyst] === OUTPUT END ===';\n\nconst startIdx = stdout.indexOf(startMarker);\nconst endIdx = stdout.indexOf(endMarker);\n\nif (startIdx === -1 || endIdx === -1) {\n  return [{\n    json: {\n      ...previousData,\n      catalyst_success: false,\n      error: 'Could not find Catalyst output markers',\n      raw_output: stdout.substring(stdout.length - 500)\n    }\n  }];\n}\n\nconst jsonStr = stdout.substring(startIdx + startMarker.length, endIdx).trim();\n\ntry {\n  const catalystOutput = JSON.parse(jsonStr);\n  return [{\n    json: {\n      ...previousData,\n      catalyst_success: catalystOutput.success,\n      markdown_file: catalystOutput.markdown_file,\n      opportunity_title: catalystOutput.opportunity_title,\n      deliverable_content: catalystOutput.deliverable_content\n    }\n  }];\n} catch (e) {\n  return [{\n    json: {\n      ...previousData,\n      catalyst_success: false,\n      error: 'Failed to parse Catalyst JSON: ' + e.message,\n      raw_json: jsonStr.substring(0, 500)\n    }\n  }];\n}"
+        "jsCode": "// Parse Catalyst output\nconst stdout = $input.first().json.stdout;\nconst previousData = $('Merge Context').first().json;\n\nconst startMarker = '[Catalyst] === OUTPUT START ===';\nconst endMarker = '[Catalyst] === OUTPUT END ===';\n\nconst startIdx = stdout.indexOf(startMarker);\nconst endIdx = stdout.indexOf(endMarker);\n\nif (startIdx === -1 || endIdx === -1) {\n  return [{\n    json: {\n      ...previousData,\n      catalyst_success: false,\n      error: 'Could not find Catalyst output markers',\n      raw_output: stdout.substring(stdout.length - 500)\n    }\n  }];\n}\n\nconst jsonStr = stdout.substring(startIdx + startMarker.length, endIdx).trim();\n\ntry {\n  const catalystOutput = JSON.parse(jsonStr);\n  return [{\n    json: {\n      ...previousData,\n      catalyst_success: catalystOutput.success,\n      markdown_file: catalystOutput.markdown_file,\n      opportunity_title: catalystOutput.opportunity_title,\n      deliverable_content: catalystOutput.deliverable_content\n    }\n  }];\n} catch (e) {\n  return [{\n    json: {\n      ...previousData,\n      catalyst_success: false,\n      error: 'Failed to parse Catalyst JSON: ' + e.message,\n      raw_json: jsonStr.substring(0, 500)\n    }\n  }];\n}"
       },
       "id": "parse-catalyst-output",
       "name": "Parse Catalyst Output",
@@ -165,7 +164,7 @@
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "echo \"{{ $now.toISO() }},{{ $json.opportunity_id }},{{ $json.user }}\" >> /opt/crewai/logs/ignored_opportunities.log",
+        "command": "=echo \"{{ $now.toISO() }},{{ $json.opportunity_id }},{{ $json.user }}\" >> /opt/crewai/logs/ignored_opportunities.log",
         "host": "192.168.1.18",
         "user": "root"
       },
@@ -269,14 +268,14 @@
       "main": [
         [
           {
-            "node": "Route by Action",
+            "node": "IF Develop",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Route by Action": {
+    "IF Develop": {
       "main": [
         [
           {
@@ -350,6 +349,6 @@
   "staticData": null,
   "tags": [],
   "triggerCount": 1,
-  "updatedAt": "2026-02-05T00:00:00.000Z",
-  "versionId": "2.1"
+  "updatedAt": "2026-02-06T12:00:00.000Z",
+  "versionId": "3.1"
 }
