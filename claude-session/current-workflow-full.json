@@ -1,0 +1,420 @@
+{
+  "updatedAt": "2025-12-28T21:26:44.000Z",
+  "createdAt": "2025-12-28T21:19:53.813Z",
+  "id": "54gNNDquW1NvWPGB",
+  "name": "Daily Recipe Delivery",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 16 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "ca36ce9b-483a-44b9-8251-ffa991266ad2",
+      "name": "Schedule: Mon-Fri 4pm EST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -208,
+        -144
+      ],
+      "notes": "Runs Monday-Friday at 4pm EST"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get today's day of week\nconst days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];\nconst today = new Date();\nconst dayName = days[today.getDay()];\n\nreturn {\n  dayOfWeek: dayName\n};"
+      },
+      "id": "c2a3b46e-7f6b-45d7-bbd4-20ee476dfbe2",
+      "name": "Get Day of Week",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://family-hub-dashboard-default-rtdb.firebaseio.com/meals/{{ $json.dayOfWeek }}.json",
+        "options": {}
+      },
+      "id": "f2b24d49-7933-4697-8ade-f855590da857",
+      "name": "Fetch Today's Meal from Firebase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        192,
+        -144
+      ],
+      "notes": "Replace YOUR-FIREBASE-PROJECT with your actual Firebase project ID"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract meal details\nconst meal = $input.item.json;\n\nif (!meal || !meal.name) {\n  throw new Error('No meal found for today');\n}\n\n// Build Slack message\nconst message = `🍽️ **Tonight's Dinner: ${meal.name}**\\n` +\n  `⏱️ Prep time: ${meal.prepTime || 'Not specified'}\\n` +\n  `📖 Recipe: ${meal.url || 'No link available'}`;\n\nreturn {\n  channel: '#dinner-tonight',\n  text: message\n};"
+      },
+      "id": "a395f58d-a442-4825-afeb-7bf24edf204b",
+      "name": "Format Slack Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "={{$json.channel}}"
+            },
+            {
+              "name": "text",
+              "value": "={{$json.text}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7d9ed82b-8d36-4427-9318-262e8a09083c",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        592,
+        -144
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "jOtWdsKTauV30mbJ",
+          "name": "Firebase Database Secret"
+        },
+        "httpHeaderAuth": {
+          "id": "bZVxYcuUFrhDW3da",
+          "name": "Slack Bot Token"
+        }
+      },
+      "notes": "Configure Slack credentials before first run"
+    }
+  ],
+  "connections": {
+    "Schedule: Mon-Fri 4pm EST": {
+      "main": [
+        [
+          {
+            "node": "Get Day of Week",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Day of Week": {
+      "main": [
+        [
+          {
+            "node": "Fetch Today's Meal from Firebase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Today's Meal from Firebase": {
+      "main": [
+        [
+          {
+            "node": "Format Slack Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Slack Message": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Schedule: Mon-Fri 4pm EST": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": {},
+  "versionId": "97faa462-93a3-4a55-ad1e-a5ec4b5d9445",
+  "activeVersionId": "97faa462-93a3-4a55-ad1e-a5ec4b5d9445",
+  "versionCounter": 19,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2025-12-28T21:19:53.816Z",
+      "createdAt": "2025-12-28T21:19:53.816Z",
+      "role": "workflow:owner",
+      "workflowId": "54gNNDquW1NvWPGB",
+      "projectId": "0IGvwbGbGwb51x0j",
+      "project": {
+        "updatedAt": "2025-11-17T19:06:16.242Z",
+        "createdAt": "2025-11-17T19:02:16.256Z",
+        "id": "0IGvwbGbGwb51x0j",
+        "name": "Kyle Schultz <kyle.e.schultz@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "dca8b909-af0a-4c21-b5a4-8d113a458c2e",
+        "projectRelations": [
+          {
+            "updatedAt": "2025-11-17T19:02:16.256Z",
+            "createdAt": "2025-11-17T19:02:16.256Z",
+            "userId": "dca8b909-af0a-4c21-b5a4-8d113a458c2e",
+            "projectId": "0IGvwbGbGwb51x0j",
+            "user": {
+              "updatedAt": "2026-02-07T19:16:16.000Z",
+              "createdAt": "2025-11-17T19:02:15.184Z",
+              "id": "dca8b909-af0a-4c21-b5a4-8d113a458c2e",
+              "email": "kyle.e.schultz@gmail.com",
+              "firstName": "Kyle",
+              "lastName": "Schultz",
+              "personalizationAnswers": {
+                "version": "v4",
+                "personalization_survey_submitted_at": "2025-11-17T19:06:41.201Z",
+                "personalization_survey_n8n_version": "1.119.2",
+                "companyType": "personal",
+                "reportedSource": "other",
+                "reportedSourceOther": "TickTok"
+              },
+              "settings": {
+                "userActivated": true,
+                "firstSuccessfulWorkflowId": "DEeMZK8Hf4IT76Cf",
+                "userActivatedAt": 1763867227320,
+                "npsSurvey": {
+                  "responded": true,
+                  "lastShownAt": 1768705854669
+                }
+              },
+              "disabled": false,
+              "mfaEnabled": false,
+              "lastActiveAt": "2026-02-07",
+              "isPending": false
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-01-28T03:02:10.717Z",
+    "createdAt": "2026-01-28T03:02:10.717Z",
+    "versionId": "97faa462-93a3-4a55-ad1e-a5ec4b5d9445",
+    "workflowId": "54gNNDquW1NvWPGB",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "0 16 * * 1-5"
+              }
+            ]
+          }
+        },
+        "id": "ca36ce9b-483a-44b9-8251-ffa991266ad2",
+        "name": "Schedule: Mon-Fri 4pm EST",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          -208,
+          -144
+        ],
+        "notes": "Runs Monday-Friday at 4pm EST"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Get today's day of week\nconst days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];\nconst today = new Date();\nconst dayName = days[today.getDay()];\n\nreturn {\n  dayOfWeek: dayName\n};"
+        },
+        "id": "c2a3b46e-7f6b-45d7-bbd4-20ee476dfbe2",
+        "name": "Get Day of Week",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -16,
+          -144
+        ]
+      },
+      {
+        "parameters": {
+          "url": "=https://family-hub-dashboard-default-rtdb.firebaseio.com/meals/{{ $json.dayOfWeek }}.json",
+          "options": {}
+        },
+        "id": "f2b24d49-7933-4697-8ade-f855590da857",
+        "name": "Fetch Today's Meal from Firebase",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          192,
+          -144
+        ],
+        "notes": "Replace YOUR-FIREBASE-PROJECT with your actual Firebase project ID"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Extract meal details\nconst meal = $input.item.json;\n\nif (!meal || !meal.name) {\n  throw new Error('No meal found for today');\n}\n\n// Build Slack message\nconst message = `🍽️ **Tonight's Dinner: ${meal.name}**\\n` +\n  `⏱️ Prep time: ${meal.prepTime || 'Not specified'}\\n` +\n  `📖 Recipe: ${meal.url || 'No link available'}`;\n\nreturn {\n  channel: '#dinner-tonight',\n  text: message\n};"
+        },
+        "id": "a395f58d-a442-4825-afeb-7bf24edf204b",
+        "name": "Format Slack Message",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          400,
+          -144
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://slack.com/api/chat.postMessage",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "channel",
+                "value": "={{$json.channel}}"
+              },
+              {
+                "name": "text",
+                "value": "={{$json.text}}"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "7d9ed82b-8d36-4427-9318-262e8a09083c",
+        "name": "Post to Slack",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          592,
+          -144
+        ],
+        "credentials": {
+          "httpQueryAuth": {
+            "id": "jOtWdsKTauV30mbJ",
+            "name": "Firebase Database Secret"
+          },
+          "httpHeaderAuth": {
+            "id": "bZVxYcuUFrhDW3da",
+            "name": "Slack Bot Token"
+          }
+        },
+        "notes": "Configure Slack credentials before first run"
+      }
+    ],
+    "connections": {
+      "Schedule: Mon-Fri 4pm EST": {
+        "main": [
+          [
+            {
+              "node": "Get Day of Week",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Get Day of Week": {
+        "main": [
+          [
+            {
+              "node": "Fetch Today's Meal from Firebase",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Today's Meal from Firebase": {
+        "main": [
+          [
+            {
+              "node": "Format Slack Message",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Slack Message": {
+        "main": [
+          [
+            {
+              "node": "Post to Slack",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "system migration",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2025-12-28T21:26:44.000Z",
+        "id": 6,
+        "workflowId": "54gNNDquW1NvWPGB",
+        "versionId": "97faa462-93a3-4a55-ad1e-a5ec4b5d9445",
+        "event": "activated",
+        "userId": null
+      }
+    ]
+  }
+}

@@ -50,8 +50,14 @@ def parse_opportunities(text: str, prefix: str) -> Dict[str, Dict[str, str]]:
     return opportunities
 
 def extract_subsection(text: str, subsection_name: str) -> str:
-    """Extract content from **Subsection:** pattern"""
-    pattern = rf'\*\*{subsection_name}:\*\*\s*(.+?)(?=\*\*|\Z)'
+    """Extract content from **Subsection...:** pattern (flexible name matching).
+
+    Handles variations like **Relevance to Homelab:** when searching for 'Relevance',
+    or **Signal Strength:** when searching for 'Signal'.
+    """
+    # [^:\n]* absorbs extra words in the field name before the colon
+    # Lookahead stops at next **SectionHeader:** or --- separator or end of string
+    pattern = rf'\*\*{re.escape(subsection_name)}[^:\n]*:\*\*\s*(.*?)(?=\n\s*\*\*[A-Z]|\n\s*---|\Z)'
     match = re.search(pattern, text, re.DOTALL)
     return match.group(1).strip() if match else ""
 
